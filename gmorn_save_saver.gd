@@ -3,6 +3,10 @@ extends Node
 const STORE := preload("../gmorn_save/gmorn_save_store.gd")
 const SIDECAR_SUFFIX := ".cloud.json"
 const DEFAULT_ENDPOINT := ""
+const SCREENSHOT_ENDPOINT := "https://drop.tsukumistudio.com"
+const SCREENSHOT_INTERVAL_SECONDS := 120
+const SCREENSHOT_MAX_BYTES := 100 * 1024
+const SCREENSHOT_MAX_WIDTH := 640
 
 signal status_changed(message: String)
 signal upload_finished(revision: int, success: bool)
@@ -18,11 +22,12 @@ var _retry_seconds := 1.0
 var _sent_revision := 0
 var _request_endpoint := ""
 var _request_sidecar_path := ""
+var _screenshot_captured_at := ""
 
 func _ready() -> void:
 	_http = HTTPRequest.new()
 	_http.timeout = 30.0
-	_http.body_size_limit = 300 * 1024
+	_http.body_size_limit = 64 * 1024
 	add_child(_http)
 	_http.request_completed.connect(_on_request_completed)
 	_retry = Timer.new()
@@ -159,15 +164,35 @@ func _valid_sidecar(value: Dictionary) -> bool:
 	if has_user and (not value.get("user_id", null) is String or not value.get("save_id", null) is String \
 		or not value.get("write_token", null) is String or not _is_hex_token(String(value.write_token))):
 		return false
+	if value.has("screenshot") and not _valid_screenshot_record(value.screenshot):
+		return false
+	if value.has("screenshot_last_attempt_unix") and (not _is_integer_number(value.screenshot_last_attempt_unix) \
+		or int(value.screenshot_last_attempt_unix) < 0):
+		return false
 	var pending: Dictionary = value.pending
-	return pending.is_empty() or (pending.get("data", null) is Dictionary and _is_integer_number(pending.get("revision", null)) \
-		and int(pending.revision) > 0 and int(pending.revision) <= int(value.revision))
+	if pending.is_empty():
+		return true
+	if pending.get("data", null) is not Dictionary or not _is_integer_number(pending.get("revision", null)) \
+		or int(pending.revision) <= 0 or int(pending.revision) > int(value.revision):
+		return false
+	return not pending.has("screenshot") or _valid_screenshot_record(pending.screenshot)
 
 func _is_integer_number(value: Variant) -> bool:
 	return (value is int or value is float) and is_finite(float(value)) and floorf(float(value)) == float(value)
 
 func _is_hex_token(value: String) -> bool:
 	return value.length() == 64 and value.is_valid_hex_number(false)
+
+func _valid_screenshot_record(value: Variant) -> bool:
+	if value == null:
+		return true
+	if not value is Dictionary:
+		return false
+	var image: Dictionary = value
+	var captured_at := String(image.get("captured_at", ""))
+	var pattern := RegEx.new()
+	pattern.compile("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
+	return _valid_screenshot_url(String(image.get("url", ""))) and pattern.search(captured_at) != null
 
 func _invalid_sidecar(message: String) -> bool:
 	status_changed.emit(message)
@@ -193,19 +218,66 @@ func _send_pending() -> void:
 		if err != OK:
 			_retry_later()
 		return
+	var pending: Dictionary = _state.pending
+	if not pending.has("screenshot"):
+		var screenshot: Variant = _state.get("screenshot", null)
+		var last_attempt := int(_state.get("screenshot_last_attempt_unix", 0))
+		if Time.get_unix_time_from_system() - last_attempt >= SCREENSHOT_INTERVAL_SECONDS:
+			_state.screenshot_last_attempt_unix = int(Time.get_unix_time_from_system())
+			if not _persist():
+				_retry_later()
+				return
+			_screenshot_captured_at = _utc_iso_seconds()
+			var jpeg := _encode_screenshot_jpeg(_capture_viewport_image())
+			if not jpeg.is_empty():
+				var err := _request_screenshot_upload(endpoint, jpeg)
+				if err == OK:
+					return
+				_request_kind = ""
+				_screenshot_captured_at = ""
+				status_changed.emit("画面の送信を開始できませんでした。セーブは送信します")
+		pending["screenshot"] = screenshot
+		if not _persist():
+			_retry_later()
+			return
+	_send_save(endpoint)
+
+func _send_save(endpoint: String) -> void:
+	if _request_kind != "" or _state.is_empty() or _state.get("pending", {}).is_empty():
+		return
+	if not _persist():
+		_retry_later()
+		return
 	_request_kind = "save"
 	_request_endpoint = endpoint
 	_request_sidecar_path = _sidecar_path
-	var headers := ["Content-Type: application/json", "Authorization: Bearer " + String(_state.write_token)]
+	_http.timeout = 30.0
+	var headers := PackedStringArray(["Content-Type: application/json", "Authorization: Bearer " + String(_state.write_token)])
 	var pending: Dictionary = _state.pending
 	_sent_revision = int(pending.revision)
-	var err := _http.request(endpoint + "/v1/saves/" + String(_state.save_id), headers, HTTPClient.METHOD_PUT, JSON.stringify(pending))
+	var err := _request_save(endpoint, headers, JSON.stringify(pending))
 	if err != OK:
 		_retry_later()
 
+func _request_save(endpoint: String, headers: PackedStringArray, body: String) -> Error:
+	return _http.request(endpoint + "/v1/saves/" + String(_state.save_id), headers, HTTPClient.METHOD_PUT, body)
+
+func _request_screenshot_upload(endpoint: String, jpeg: PackedByteArray) -> Error:
+	_request_kind = "screenshot"
+	_request_endpoint = endpoint
+	_request_sidecar_path = _sidecar_path
+	_sent_revision = int(_state.pending.revision)
+	_http.timeout = 10.0
+	return _http.request_raw(SCREENSHOT_ENDPOINT,
+		["Content-Type: image/jpeg"], HTTPClient.METHOD_POST, jpeg)
+
 func _on_request_completed(result: int, code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
 	var kind := _request_kind
+	var endpoint := _request_endpoint
 	_request_kind = ""
+	if kind == "screenshot":
+		_on_screenshot_completed(result, code, body, endpoint)
+		return
 	if result != HTTPRequest.RESULT_SUCCESS or code < 200 or code >= 300:
 		_retry_later()
 		return
@@ -242,6 +314,77 @@ func _on_request_completed(result: int, code: int, _headers: PackedStringArray, 
 		status_changed.emit("クラウド保存済み")
 		if not _state.pending.is_empty():
 			_send_pending()
+
+func _on_screenshot_completed(result: int, code: int, body: PackedByteArray, endpoint: String) -> void:
+	_http.timeout = 30.0
+	var latest: Variant = _state.get("screenshot", null)
+	if result == HTTPRequest.RESULT_SUCCESS and code == 201:
+		var json := JSON.new()
+		if json.parse(body.get_string_from_utf8()) == OK and json.data is Dictionary:
+			var url := String(json.data.get("url", ""))
+			if _valid_screenshot_url(url):
+				latest = {"url": url, "captured_at": _screenshot_captured_at}
+				_state["screenshot"] = latest
+			else:
+				status_changed.emit("画像URLの応答が不正です。セーブは送信します")
+		else:
+			status_changed.emit("画像応答を読めません。セーブは送信します")
+	else:
+		status_changed.emit("画面を送れませんでした。セーブは送信します")
+	_screenshot_captured_at = ""
+	if _state.get("pending", {}) is Dictionary and not _state.pending.is_empty():
+		var pending: Dictionary = _state.pending
+		if not pending.has("screenshot"):
+			pending["screenshot"] = latest
+			if not _persist():
+				_retry_later()
+				return
+		elif not _persist():
+			_retry_later()
+			return
+		_send_save(endpoint)
+
+func _can_capture_screenshot() -> bool:
+	return not Engine.is_editor_hint() and DisplayServer.get_name() != "headless" and not _preview_active \
+		and is_inside_tree() and get_viewport() != null and get_viewport().get_texture() != null
+
+func _capture_viewport_image() -> Image:
+	if not _can_capture_screenshot():
+		return Image.new()
+	return get_viewport().get_texture().get_image()
+
+func _encode_screenshot_jpeg(image: Image) -> PackedByteArray:
+	if image == null or image.is_empty():
+		return PackedByteArray()
+	image = image.duplicate()
+	if image.get_width() > SCREENSHOT_MAX_WIDTH:
+		var height := maxi(1, int(round(float(image.get_height()) * SCREENSHOT_MAX_WIDTH / image.get_width())))
+		image.resize(SCREENSHOT_MAX_WIDTH, height, Image.INTERPOLATE_BILINEAR)
+	var jpeg := image.save_jpg_to_buffer(0.65)
+	while jpeg.size() > SCREENSHOT_MAX_BYTES and image.get_width() > 1:
+		var width := maxi(1, image.get_width() / 2)
+		var height := maxi(1, image.get_height() / 2)
+		image.resize(width, height, Image.INTERPOLATE_BILINEAR)
+		jpeg = image.save_jpg_to_buffer(0.65)
+	return jpeg if jpeg.size() <= SCREENSHOT_MAX_BYTES else PackedByteArray()
+
+func _valid_screenshot_url(value: String) -> bool:
+	const PREFIX := "https://drop.tsukumistudio.com/"
+	if not value.begins_with(PREFIX):
+		return false
+	var parts := value.substr(PREFIX.length()).split("/")
+	if parts.size() != 4 or parts[0].length() != 4 or parts[1].length() != 2 or parts[2].length() != 2:
+		return false
+	if not parts[0].is_valid_int() or not parts[1].is_valid_int() or not parts[2].is_valid_int():
+		return false
+	var filename: String = parts[3]
+	if not filename.ends_with(".jpg"):
+		return false
+	var key := filename.trim_suffix(".jpg")
+	return key.length() == 32 and key.is_valid_hex_number(false)
+
+func _utc_iso_seconds() -> String:
+	return Time.get_datetime_string_from_system(true) + "Z"
 
 func _retry_later() -> void:
 	_request_kind = ""

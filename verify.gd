@@ -7,6 +7,37 @@ const SIDECAR := "user://gmorn_save_saver_verify.json"
 const SAVE := "user://gmorn_save_saver_verify.json.cloud.json"
 const MARKER := "user://gmorn_save_saver_preview_request.json"
 const PREVIEW := "user://gmorn_save_saver_preview.json"
+const IMAGE_SUCCESS := "user://gmorn_save_saver_image_success.json.cloud.json"
+const IMAGE_FAILURE := "user://gmorn_save_saver_image_failure.json.cloud.json"
+const IMAGE_URL := "https://drop.tsukumistudio.com/2026/09/23/0123456789abcdef0123456789abcdef.jpg"
+
+class TestSaver extends SAVER:
+	var fixture: Image
+	var capture_count := 0
+	var image_requests: Array[PackedByteArray] = []
+	var save_requests: Array[Dictionary] = []
+	var persist_allowed := true
+
+	func _capture_viewport_image() -> Image:
+		capture_count += 1
+		return fixture
+
+	func _request_screenshot_upload(endpoint: String, jpeg: PackedByteArray) -> Error:
+		_request_kind = "screenshot"
+		_request_endpoint = endpoint
+		_request_sidecar_path = _sidecar_path
+		_sent_revision = int(_state.pending.revision)
+		image_requests.append(jpeg.duplicate())
+		return OK
+
+	func _request_save(_endpoint: String, _headers: PackedStringArray, body: String) -> Error:
+		var json := JSON.new()
+		assert(json.parse(body) == OK and json.data is Dictionary)
+		save_requests.append(json.data)
+		return OK
+
+	func _persist() -> bool:
+		return persist_allowed and super._persist()
 
 func _initialize() -> void:
 	var watchdog := create_timer(5.0)
@@ -53,6 +84,8 @@ func _run() -> void:
 	assert(saver.consume_preview() == PREVIEW)
 	assert(saver.consume_preview().is_empty())
 	assert(saver._preview_active)
+	if not await _verify_screenshot_flow():
+		return
 	_clean()
 	print("GMORN SAVE SAVER VERIFY: PASS")
 	quit(0)
@@ -101,7 +134,122 @@ func _read_pipe(pipe: FileAccess, output: PackedByteArray) -> void:
 			break
 		output.append_array(chunk)
 
+func _verify_screenshot_flow() -> bool:
+	OS.set_environment("GMORN_SAVE_SAVER_TEST_OPT_IN", "1")
+	ProjectSettings.set_setting("gmorn_save_saver/endpoint", "https://save.example.invalid")
+	var pixels := PackedByteArray()
+	pixels.resize(800 * 600 * 3)
+	var random := RandomNumberGenerator.new()
+	random.seed = 731
+	for index in pixels.size():
+		pixels[index] = random.randi_range(0, 255)
+	var image := Image.create_from_data(800, 600, false, Image.FORMAT_RGB8, pixels)
+	var saver := TestSaver.new()
+	saver.fixture = image
+	root.add_child(saver)
+	var jpeg := saver._encode_screenshot_jpeg(image)
+	var decoded := Image.new()
+	var encoded_ok := not jpeg.is_empty() and jpeg.size() <= 100 * 1024 \
+		and decoded.load_jpg_from_buffer(jpeg) == OK and decoded.get_width() <= 640
+	if not encoded_ok:
+		push_error("JPEG encoder did not meet 640px / 100KiB limits")
+		quit(1)
+		return false
+	if not saver._valid_screenshot_url(IMAGE_URL) or saver._valid_screenshot_url("https://evil.example/" + IMAGE_URL.get_file()):
+		push_error("MornDrop URL validation did not enforce the exact origin")
+		quit(1)
+		return false
+	_prime_registered_saver(saver, IMAGE_SUCCESS)
+	saver._send_pending()
+	if saver.image_requests.size() != 1:
+		push_error("new screenshot was not uploaded")
+		quit(1)
+		return false
+	# A newer local save during the image request must receive its own revision and data.
+	saver.submit({"day": 2}, IMAGE_SUCCESS.trim_suffix(".cloud.json"))
+	saver._request_kind = ""
+	saver._on_screenshot_completed(HTTPRequest.RESULT_SUCCESS, 201,
+		("{\"url\":\"" + IMAGE_URL + "\"}").to_utf8_buffer(), "https://save.example.invalid")
+	if saver.save_requests.size() != 1 or saver.save_requests[0].revision != 2 \
+		or saver.save_requests[0].data.day != 2 or saver.save_requests[0].screenshot.url != IMAGE_URL \
+		or not saver._valid_screenshot_record(saver.save_requests[0].screenshot):
+		push_error("image response mixed the saved revision or metadata")
+		quit(1)
+		return false
+	var sent_image: Dictionary = saver.save_requests[0].screenshot.duplicate(true)
+	saver._request_kind = ""
+	saver._send_pending() # Retry must resend the same screenshot without another upload.
+	if saver.image_requests.size() != 1 or saver.save_requests.size() != 2 \
+		or saver.save_requests[1].screenshot != sent_image:
+		push_error("same-revision retry changed the screenshot")
+		quit(1)
+		return false
+	# A new save less than 120 seconds later reuses the latest image.
+	saver._request_kind = ""
+	saver.submit({"day": 3}, IMAGE_SUCCESS.trim_suffix(".cloud.json"))
+	saver._send_pending()
+	if saver.image_requests.size() != 1 or saver.capture_count != 1 \
+		or saver.save_requests[2].screenshot != sent_image:
+		push_error("120-second cadence did not reuse the latest image")
+		quit(1)
+		return false
+	# A failed image upload still produces a JSON save with screenshot=null, then no image-only retry.
+	var failed := TestSaver.new()
+	failed.fixture = image
+	root.add_child(failed)
+	_prime_registered_saver(failed, IMAGE_FAILURE)
+	failed._send_pending()
+	if failed.image_requests.size() != 1:
+		push_error("failure fixture did not start its image attempt")
+		quit(1)
+		return false
+	failed._request_kind = ""
+	failed._on_screenshot_completed(HTTPRequest.RESULT_TIMEOUT, 0, PackedByteArray(), "https://save.example.invalid")
+	if failed.save_requests.size() != 1 or failed.save_requests[0].screenshot != null:
+		push_error("failed image did not continue with screenshot=null JSON")
+		quit(1)
+		return false
+	failed._request_kind = ""
+	failed.submit({"day": 2}, IMAGE_FAILURE.trim_suffix(".cloud.json"))
+	failed._send_pending()
+	if failed.image_requests.size() != 1 or failed.save_requests.size() != 2 or failed.save_requests[1].screenshot != null:
+		push_error("failed image was retried before the 120-second limit")
+		quit(1)
+		return false
+	# Persistence failure must block the JSON request; the same pending data sends after storage recovers.
+	var blocked := TestSaver.new()
+	root.add_child(blocked)
+	_prime_registered_saver(blocked, IMAGE_FAILURE + ".blocked")
+	blocked.persist_allowed = false
+	blocked._send_save("https://save.example.invalid")
+	if not blocked.save_requests.is_empty():
+		push_error("JSON request started despite sidecar persistence failure")
+		quit(1)
+		return false
+	blocked.persist_allowed = true
+	blocked._send_save("https://save.example.invalid")
+	if blocked.save_requests.size() != 1:
+		push_error("pending JSON did not resume after sidecar persistence recovered")
+		quit(1)
+		return false
+	for test_saver: TestSaver in [saver, failed, blocked]:
+		test_saver._retry.stop()
+		test_saver.queue_free()
+	print("SCREENSHOT JSON FLOW VERIFY: PASS")
+	return true
+
+func _prime_registered_saver(saver: TestSaver, path: String) -> void:
+	saver._sidecar_path = path
+	saver._loaded = true
+	saver._state = {
+		"project_id": "project", "registration_key": "a".repeat(64),
+		"user_id": "123e4567-e89b-12d3-a456-426614174001",
+		"save_id": "123e4567-e89b-12d3-a456-426614174000", "write_token": "b".repeat(64),
+		"revision": 1, "pending": {"data": {"day": 1}, "revision": 1}
+	}
+	assert(saver._persist())
+
 func _clean() -> void:
-	for path in [SAVE, SAVE + ".bak", SAVE + ".tmp", MARKER, MARKER + ".bak", MARKER + ".tmp", PREVIEW, PREVIEW + ".bak", PREVIEW + ".tmp"]:
+	for path in [SAVE, SAVE + ".bak", SAVE + ".tmp", MARKER, MARKER + ".bak", MARKER + ".tmp", PREVIEW, PREVIEW + ".bak", PREVIEW + ".tmp", IMAGE_SUCCESS, IMAGE_SUCCESS + ".bak", IMAGE_SUCCESS + ".tmp", IMAGE_FAILURE, IMAGE_FAILURE + ".bak", IMAGE_FAILURE + ".tmp", IMAGE_FAILURE + ".blocked"]:
 		if FileAccess.file_exists(path):
 			DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
