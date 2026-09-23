@@ -79,7 +79,12 @@ func _assert_admin_data(save_id: String, expected: Dictionary) -> bool:
 	if not _check(json.parse((response[3] as PackedByteArray).get_string_from_utf8()) == OK and json.data is Dictionary, "admin response invalid"):
 		request.queue_free()
 		return false
-	var matches: bool = json.data.project_id == OS.get_environment("GMORN_SAVE_SAVER_PROJECT_ID") and json.data.data == expected
+	# JSONの数値はfloatで戻るため、Dictionaryの型を含む等価判定を使わない。
+	var matches: bool = json.data.project_id == OS.get_environment("GMORN_SAVE_SAVER_PROJECT_ID") \
+		and json.data.data is Dictionary and json.data.data.size() == expected.size()
+	if matches:
+		for key in expected:
+			matches = matches and json.data.data.get(key) == expected[key]
 	request.queue_free()
 	return _check(matches, "admin response data or project_id mismatch")
 
