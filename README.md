@@ -10,6 +10,8 @@ GMornSaveへ保存したJSONをサーバーへバックアップし、Editorか�
 - [GMornSave](https://github.com/TsukumiStudio/GMornSave) を隣接アドオンとして導入
 - [MornSaveSaver](https://github.com/TsukumiStudio/MornSaveSaver) サーバーAPI
 
+単体検証は `./verify.sh` で実行できます。隣接するGMornSaveが見つからない場合は、`GMORN_SAVE_SOURCE` にそのアドオンのパスを指定します。
+
 ## 機能
 
 - ローカル保存と独立した `.cloud.json` サイドカーへ資格情報と最新の保留データを保存

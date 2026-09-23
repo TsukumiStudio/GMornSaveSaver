@@ -23,8 +23,8 @@ func _process(_delta: float) -> void:
 func _fetch() -> void:
 	if EditorInterface.is_playing_scene():
 		return
-	var save_id := $SaveId.text.strip_edges()
-	var token := $AdminToken.text
+	var save_id: String = $SaveId.text.strip_edges()
+	var token: String = $AdminToken.text
 	var endpoint := OS.get_environment("GMORN_SAVE_SAVER_ENDPOINT")
 	if endpoint.is_empty() and ProjectSettings.has_setting("gmorn_save_saver/endpoint"):
 		endpoint = String(ProjectSettings.get_setting("gmorn_save_saver/endpoint"))

@@ -7,7 +7,7 @@ var panel: Control
 var added_autoload := false
 
 func _enter_tree() -> void:
-	var base := get_script().resource_path.get_base_dir()
+	var base: String = get_script().resource_path.get_base_dir()
 	if not ProjectSettings.has_setting("autoload/" + AUTOLOAD):
 		add_autoload_singleton(AUTOLOAD, base.path_join("gmorn_save_saver.gd"))
 		added_autoload = true

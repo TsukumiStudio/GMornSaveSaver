@@ -2,7 +2,14 @@
 set -eu
 addon_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 godot_bin=${GODOT_BIN:-$(command -v godot 2>/dev/null || echo /Applications/Godot.app/Contents/MacOS/Godot)}
-save_source=${GMORN_SAVE_SOURCE:-"$addon_dir/../KimekyawaGodot/addons/gmorn_save"}
+save_source=${GMORN_SAVE_SOURCE:-}
+if [ -z "$save_source" ]; then
+	if [ -d "$addon_dir/../gmorn_save" ]; then
+		save_source="$addon_dir/../gmorn_save"
+	else
+		save_source="$addon_dir/../KimekyawaGodot/addons/gmorn_save"
+	fi
+fi
 work_dir=$(mktemp -d)
 trap 'rm -rf "$work_dir"' EXIT
 mkdir -p "$work_dir/addons/gmorn_save_saver" "$work_dir/addons/gmorn_save"
@@ -19,6 +26,14 @@ config_version=5
 config/name="GMornSaveSaver Verify $unique_name"
 config/features=PackedStringArray("4.7")
 run/main_scene="res://main.tscn"
+
+[autoload]
+
+GMornSaveSaver="*res://addons/gmorn_save_saver/gmorn_save_saver.gd"
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/gmorn_save_saver/plugin.cfg")
 PROJECT
 cat > "$work_dir/main.tscn" <<'SCENE'
 [gd_scene format=3]
@@ -33,7 +48,8 @@ run_check() {
 		return 1
 	fi
 }
-run_check "$godot_bin" --headless --editor --path "$work_dir" --quit
+run_check env -u GMORN_SAVE_SAVER_PROJECT_ID -u GMORN_SAVE_SAVER_ENDPOINT -u GMORN_SAVE_SAVER_ADMIN_TOKEN \
+	"$godot_bin" --headless --editor --path "$work_dir" --quit
 run_check "$godot_bin" --headless --path "$work_dir" --quit
 run_check env -u GMORN_SAVE_SAVER_PROJECT_ID -u GMORN_SAVE_SAVER_ENDPOINT -u GMORN_SAVE_SAVER_ADMIN_TOKEN \
 	"$godot_bin" --headless --path "$work_dir" --script verify.gd

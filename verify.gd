@@ -2,6 +2,7 @@ extends SceneTree
 
 const SAVER := preload("res://addons/gmorn_save_saver/gmorn_save_saver.gd")
 const STORE := preload("res://addons/gmorn_save/gmorn_save_store.gd")
+const LIVE_VERIFY := preload("res://verify_http.gd")
 const SIDECAR := "user://gmorn_save_saver_verify.json"
 const SAVE := "user://gmorn_save_saver_verify.json.cloud.json"
 const MARKER := "user://gmorn_save_saver_preview_request.json"
@@ -35,6 +36,14 @@ func _run() -> void:
 	saver._sidecar_path = ""
 	assert(not saver._load_sidecar(SIDECAR))
 	assert(FileAccess.get_file_as_string(SAVE) == "not-json")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(SAVE))
+	var backup := FileAccess.open(SAVE + ".bak", FileAccess.WRITE)
+	backup.store_string('{"project_id":"project","registration_key":"' + "b".repeat(64) + '","revision":4,"pending":{}}')
+	backup.close()
+	saver._loaded = false
+	saver._sidecar_path = ""
+	assert(not saver._load_sidecar(SIDECAR), "created a new registration despite a recoverable backup")
+	assert(not FileAccess.file_exists(SAVE), "wrote a new sidecar beside the backup")
 	# Preview marker is one-shot; test opt-in allows headless verification.
 	assert(_open_store(PREVIEW).save({"day": 23}))
 	assert(_open_store(MARKER).save({"path": PREVIEW}))

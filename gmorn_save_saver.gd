@@ -136,6 +136,8 @@ func _load_sidecar(save_path: String) -> bool:
 		_state = raw
 		_loaded = true
 		return true
+	if FileAccess.file_exists(path + ".bak"):
+		return _invalid_sidecar("サイドカー本体がなく控えが残っています。新規登録せず、控えを確認してください")
 	var project_id := _project_id()
 	if project_id.is_empty():
 		return _invalid_sidecar("project_idが未設定です")
