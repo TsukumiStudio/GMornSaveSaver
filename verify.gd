@@ -155,6 +155,15 @@ func _verify_screenshot_flow() -> bool:
 		push_error("JPEG encoder did not meet 640px / 100KiB limits")
 		quit(1)
 		return false
+	var wide_image := Image.create(800, 600, false, Image.FORMAT_RGB8)
+	wide_image.fill(Color(0.4, 0.5, 0.8))
+	var wide_jpeg := saver._encode_screenshot_jpeg(wide_image)
+	var wide_decoded := Image.new()
+	if wide_jpeg.size() > 100 * 1024 or wide_decoded.load_jpg_from_buffer(wide_jpeg) != OK \
+		or wide_decoded.get_width() > 640:
+		push_error("wide but compressible images must still respect the 640px limit")
+		quit(1)
+		return false
 	if not saver._valid_screenshot_url(IMAGE_URL) or saver._valid_screenshot_url("https://evil.example/" + IMAGE_URL.get_file()):
 		push_error("MornDrop URL validation did not enforce the exact origin")
 		quit(1)
