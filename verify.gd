@@ -17,6 +17,8 @@ func _initialize() -> void:
 
 func _run() -> void:
 	_clean()
+	if not await _verify_pipe_output():
+		return
 	var saver = SAVER.new()
 	root.add_child(saver)
 	ProjectSettings.set_setting("gmorn_save_saver/project_id", "project")
@@ -59,6 +61,45 @@ func _open_store(path: String) -> RefCounted:
 	var store: RefCounted = STORE.new()
 	store.path = path
 	return store
+
+func _verify_pipe_output() -> bool:
+	var started := Time.get_ticks_msec()
+	var child: Dictionary = OS.execute_with_pipe("/bin/sh", PackedStringArray([
+		"-c", "sleep 0.05; printf 'header.payload.signature\\n'; printf diagnostic >&2"
+	]), false)
+	if child.is_empty() or Time.get_ticks_msec() - started > 500:
+		push_error("execute_with_pipe did not start asynchronously")
+		quit(1)
+		return false
+	var stdout: FileAccess = child.stdio
+	var stderr: FileAccess = child.stderr
+	var pid := int(child.pid)
+	var output := PackedByteArray()
+	var error_output := PackedByteArray()
+	var deadline := Time.get_ticks_msec() + 2000
+	while OS.is_process_running(pid) and Time.get_ticks_msec() < deadline:
+		_read_pipe(stdout, output)
+		_read_pipe(stderr, error_output)
+		await process_frame
+	_read_pipe(stdout, output)
+	_read_pipe(stderr, error_output)
+	var passed := not OS.is_process_running(pid) \
+		and output.get_string_from_utf8().strip_edges() == "header.payload.signature" \
+		and error_output.get_string_from_utf8() == "diagnostic"
+	stdout.close()
+	stderr.close()
+	if not passed:
+		push_error("execute_with_pipe did not expose stdout/stderr pipe output")
+		quit(1)
+		return false
+	return true
+
+func _read_pipe(pipe: FileAccess, output: PackedByteArray) -> void:
+	while pipe.get_length() > 0:
+		var chunk: PackedByteArray = pipe.get_buffer(mini(pipe.get_length(), 4096))
+		if chunk.is_empty():
+			break
+		output.append_array(chunk)
 
 func _clean() -> void:
 	for path in [SAVE, SAVE + ".bak", SAVE + ".tmp", MARKER, MARKER + ".bak", MARKER + ".tmp", PREVIEW, PREVIEW + ".bak", PREVIEW + ".tmp"]:

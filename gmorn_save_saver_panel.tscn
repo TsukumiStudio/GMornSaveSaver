@@ -12,13 +12,9 @@ text = "GMornSaveSaver"
 [node name="SaveId" type="LineEdit" parent="."]
 placeholder_text = "保存ID（UUID）"
 
-[node name="AdminToken" type="LineEdit" parent="."]
-placeholder_text = "管理者トークン（この起動中のみ）"
-secret = true
-
 [node name="Fetch" type="Button" parent="."]
-text = "別ユーザーのセーブを取得"
+text = "Cloudflare Access認証して取得"
 
 [node name="Status" type="Label" parent="."]
-text = "停止中のみ取得できます"
+text = "保存IDを入力してください。初回はブラウザーで認証します"
 autowrap_mode = 2

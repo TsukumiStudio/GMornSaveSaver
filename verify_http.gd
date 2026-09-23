@@ -2,6 +2,7 @@ extends SceneTree
 
 const SAVER := preload("res://addons/gmorn_save_saver/gmorn_save_saver.gd")
 const STORE := preload("res://addons/gmorn_save/gmorn_save_store.gd")
+const MAX_TOKEN_BYTES := 8192
 
 var saver: Node
 var completed_revision := 0
@@ -14,7 +15,7 @@ func _initialize() -> void:
 	call_deferred("_run")
 
 func _run() -> void:
-	for name in ["GMORN_SAVE_SAVER_ENDPOINT", "GMORN_SAVE_SAVER_PROJECT_ID", "GMORN_SAVE_SAVER_ADMIN_TOKEN"]:
+	for name in ["GMORN_SAVE_SAVER_ENDPOINT", "GMORN_SAVE_SAVER_PROJECT_ID"]:
 		if not _check(not OS.get_environment(name).is_empty(), name + " env required"):
 			return
 	saver = SAVER.new()
@@ -62,13 +63,17 @@ func _read_sidecar(path: String) -> Dictionary:
 	return json.data
 
 func _assert_admin_data(save_id: String, expected: Dictionary) -> bool:
+	var endpoint := OS.get_environment("GMORN_SAVE_SAVER_ENDPOINT").trim_suffix("/")
+	var jwt: String = await _cached_access_token(endpoint + "/v1/admin")
+	if not _check(not jwt.is_empty(), "Access token cache missing; complete the Editor login once before live verification"):
+		return false
 	var request := HTTPRequest.new()
 	request.timeout = 15.0
 	request.body_size_limit = 300 * 1024
 	root.add_child(request)
-	var endpoint := OS.get_environment("GMORN_SAVE_SAVER_ENDPOINT").trim_suffix("/")
 	var err := request.request(endpoint + "/v1/admin/saves/" + save_id.uri_encode(),
-		["Authorization: Bearer " + OS.get_environment("GMORN_SAVE_SAVER_ADMIN_TOKEN")], HTTPClient.METHOD_GET)
+		["cf-access-token: " + jwt], HTTPClient.METHOD_GET)
+	jwt = ""
 	if not _check(err == OK, "admin fetch request could not start"):
 		return false
 	var response: Array = await request.request_completed
@@ -79,7 +84,6 @@ func _assert_admin_data(save_id: String, expected: Dictionary) -> bool:
 	if not _check(json.parse((response[3] as PackedByteArray).get_string_from_utf8()) == OK and json.data is Dictionary, "admin response invalid"):
 		request.queue_free()
 		return false
-	# JSONの数値はfloatで戻るため、Dictionaryの型を含む等価判定を使わない。
 	var matches: bool = json.data.project_id == OS.get_environment("GMORN_SAVE_SAVER_PROJECT_ID") \
 		and json.data.data is Dictionary and json.data.data.size() == expected.size()
 	if matches:
@@ -87,6 +91,76 @@ func _assert_admin_data(save_id: String, expected: Dictionary) -> bool:
 			matches = matches and json.data.data.get(key) == expected[key]
 	request.queue_free()
 	return _check(matches, "admin response data or project_id mismatch")
+
+func _cached_access_token(app_url: String) -> String:
+	var binary := _find_cloudflared()
+	if binary.is_empty():
+		_check(false, "cloudflared not found")
+		return ""
+	var process: Dictionary = OS.execute_with_pipe(binary,
+		PackedStringArray(["access", "token", "--app", app_url]), false)
+	if process.is_empty() or not process.get("stdio", null) is FileAccess or not process.get("stderr", null) is FileAccess:
+		_check(false, "cloudflared access token could not start")
+		return ""
+	var stdout: FileAccess = process.stdio
+	var stderr: FileAccess = process.stderr
+	var pid := int(process.get("pid", -1))
+	if not _check(pid > 0, "cloudflared access token returned no process ID"):
+		stdout.close()
+		stderr.close()
+		return ""
+	var output := PackedByteArray()
+	var started := Time.get_ticks_msec()
+	while OS.is_process_running(pid) and Time.get_ticks_msec() - started < 10000:
+		_drain_pipes(stdout, stderr, output)
+		if output.size() > MAX_TOKEN_BYTES:
+			OS.kill(pid)
+			break
+		await process_frame
+	_drain_pipes(stdout, stderr, output)
+	var timed_out := OS.is_process_running(pid)
+	if timed_out:
+		OS.kill(pid)
+	stdout.close()
+	stderr.close()
+	if timed_out or output.size() > MAX_TOKEN_BYTES:
+		_check(false, "cloudflared access token timed out")
+		return ""
+	var jwt := output.get_string_from_utf8().strip_edges()
+	if not _is_jwt(jwt):
+		_check(false, "cloudflared access token failed")
+		return ""
+	return jwt
+
+func _drain_pipes(stdout: FileAccess, stderr: FileAccess, output: PackedByteArray) -> void:
+	while stdout.get_length() > 0:
+		var chunk_size := mini(stdout.get_length(), mini(4096, MAX_TOKEN_BYTES + 1 - output.size()))
+		if chunk_size <= 0:
+			break
+		var chunk: PackedByteArray = stdout.get_buffer(chunk_size)
+		if chunk.is_empty():
+			break
+		output.append_array(chunk)
+	while stderr.get_length() > 0:
+		var discarded: PackedByteArray = stderr.get_buffer(mini(stderr.get_length(), 4096))
+		if discarded.is_empty():
+			break
+
+func _find_cloudflared() -> String:
+	var separator := ";" if OS.get_name() == "Windows" else ":"
+	var executable := "cloudflared.exe" if OS.get_name() == "Windows" else "cloudflared"
+	for directory: String in OS.get_environment("PATH").split(separator, false):
+		var candidate := directory.path_join(executable)
+		if FileAccess.file_exists(candidate):
+			return candidate
+	for candidate: String in ["/opt/homebrew/bin/cloudflared", "/usr/local/bin/cloudflared"]:
+		if FileAccess.file_exists(candidate):
+			return candidate
+	return ""
+
+func _is_jwt(value: String) -> bool:
+	var parts := value.split(".")
+	return parts.size() == 3 and not parts[0].is_empty() and not parts[1].is_empty() and not parts[2].is_empty()
 
 func _check(condition: bool, message: String) -> bool:
 	if not condition:

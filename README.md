@@ -9,6 +9,7 @@ GMornSaveへ保存したJSONをサーバーへバックアップし、Editorか�
 - Godot 4.7+
 - [GMornSave](https://github.com/TsukumiStudio/GMornSave) を隣接アドオンとして導入
 - [MornSaveSaver](https://github.com/TsukumiStudio/MornSaveSaver) サーバーAPI
+- 管理セーブの取得には [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) が必要（`PATH`、`/opt/homebrew/bin`、または`/usr/local/bin`から検出）
 
 単体検証は `./verify.sh` で実行できます。隣接するGMornSaveが見つからない場合は、`GMORN_SAVE_SOURCE` にそのアドオンのパスを指定します。
 
@@ -31,10 +32,10 @@ GMornSaveSaver.submit(game_data, save_path)
 GMornSaveSaver.resume(save_path) # 起動時、通常保存をロードした後に呼ぶ
 ```
 
-4. Editorから別ユーザーのセーブを試すには、Editorを停止した状態でGMornSaveSaverドックへSave IDを入れます。`GMORN_SAVE_SAVER_ADMIN_TOKEN` をEditorの環境変数に設定するか、ドックのAdmin token欄へ一時入力し、「別ユーザーのセーブを取得」を押します。入力値はEditorメモリ内だけに置きます。project_idが一致する辞書データだけを `gmorn_save_saver/preview_path` （既定 `user://gmorn_save_saver_preview.json`）へ保存します。
+4. Editorから別ユーザーのセーブを試すには、Editorを停止した状態でGMornSaveSaverドックへSave IDを入れて、「Cloudflare Access認証して取得」を押します。`cloudflared access login` が非同期で起動し、初回はブラウザーでCloudflare Accessへログインします。JWTはHTTPヘッダーへ渡すだけで、アドオン内には表示・保存しません。認証キャッシュはcloudflaredが管理します。project_idが一致する辞書データだけを `gmorn_save_saver/preview_path` （既定 `user://gmorn_save_saver_preview.json`）へ保存します。
 5. ゲーム起動時、保存を読む前に `var preview_path = GMornSaveSaver.consume_preview()` を呼び、空でなければゲーム側の保存パスをその値に切り替えます。プレビュー中は送信を止めます。マーカーはEditorからの通常実行に限って一度だけ消費されます。
 
-送信のopt-in環境変数はEditorプラグイン中に限り `GMORN_SAVE_SAVER_EDITOR_OPT_IN=1`、headless中に限り `GMORN_SAVE_SAVER_TEST_OPT_IN=1` です。headlessでプレビュー消費テストを行う場合だけ `GMORN_SAVE_SAVER_TEST_PREVIEW=1` を指定します。`GMORN_SAVE_SAVER_LIVE_TEST=1` を付けて `verify.sh` を実行すると、設定済みのendpoint・project_id・admin tokenへ実際の登録、二段階アップロード、取得を行います。
+送信のopt-in環境変数はEditorプラグイン中に限り `GMORN_SAVE_SAVER_EDITOR_OPT_IN=1`、headless中に限り `GMORN_SAVE_SAVER_TEST_OPT_IN=1` です。headlessでプレビュー消費テストを行う場合だけ `GMORN_SAVE_SAVER_TEST_PREVIEW=1` を指定します。`GMORN_SAVE_SAVER_LIVE_TEST=1` を付けて `verify.sh` を実行すると、設定済みのendpoint・project_idへ実際の登録、二段階アップロード、取得を行います。Live検証の管理取得では、事前に同じendpointへcloudflaredで認証しキャッシュを作成してください。
 
 ## ライセンス
 
