@@ -35,7 +35,8 @@ run_check() {
 }
 run_check "$godot_bin" --headless --editor --path "$work_dir" --quit
 run_check "$godot_bin" --headless --path "$work_dir" --quit
-run_check "$godot_bin" --headless --path "$work_dir" --script verify.gd
+run_check env -u GMORN_SAVE_SAVER_PROJECT_ID -u GMORN_SAVE_SAVER_ENDPOINT -u GMORN_SAVE_SAVER_ADMIN_TOKEN \
+	"$godot_bin" --headless --path "$work_dir" --script verify.gd
 if [ "${GMORN_SAVE_SAVER_LIVE_TEST:-0}" = "1" ]; then
 	run_check env GMORN_SAVE_SAVER_TEST_OPT_IN=1 "$godot_bin" --headless --path "$work_dir" --script verify_http.gd
 fi

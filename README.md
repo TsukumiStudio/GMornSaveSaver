@@ -8,7 +8,7 @@ GMornSaveへ保存したJSONをサーバーへバックアップし、Editorか�
 
 - Godot 4.7+
 - [GMornSave](https://github.com/TsukumiStudio/GMornSave) を隣接アドオンとして導入
-- `GMornSaveSaver` のサーバーAPI
+- [MornSaveSaver](https://github.com/TsukumiStudio/MornSaveSaver) サーバーAPI
 
 ## 機能
 
