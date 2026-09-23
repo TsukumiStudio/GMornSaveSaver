@@ -1,0 +1,28 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://addons/gmorn_save_saver/gmorn_save_saver_panel.gd" id="1"]
+
+[node name="GMornSaveSaver" type="VBoxContainer"]
+custom_minimum_size = Vector2(300, 0)
+script = ExtResource("1")
+
+[node name="Heading" type="Label" parent="."]
+text = "GMornSaveSaver"
+
+[node name="Description" type="Label" parent="."]
+text = "停止中にSave IDを入力して取得します"
+autowrap_mode = 2
+
+[node name="SaveId" type="LineEdit" parent="."]
+placeholder_text = "Save ID (UUID)"
+
+[node name="AdminToken" type="LineEdit" parent="."]
+placeholder_text = "Admin token (session only)"
+secret = true
+
+[node name="Fetch" type="Button" parent="."]
+text = "別ユーザーのセーブを取得"
+
+[node name="Status" type="Label" parent="."]
+text = "停止中のみ取得できます"
+autowrap_mode = 2
