@@ -2,7 +2,6 @@ extends SceneTree
 
 const SAVER := preload("res://addons/gmorn_save_saver/gmorn_save_saver.gd")
 const STORE := preload("res://addons/gmorn_save/gmorn_save_store.gd")
-const LIVE_VERIFY := preload("res://verify_http.gd")
 const SIDECAR := "user://gmorn_save_saver_verify.json"
 const SAVE := "user://gmorn_save_saver_verify.json.cloud.json"
 const MARKER := "user://gmorn_save_saver_preview_request.json"
