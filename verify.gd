@@ -85,6 +85,22 @@ func _run() -> void:
 	assert(saver._preview_active)
 	if not await _verify_screenshot_flow():
 		return
+	# 送信の最短間隔。未設定なら2秒の静かな間だけ、設定すると前の送信からその秒数を待つ。
+	var paced = SAVER.new()
+	root.add_child(paced)
+	assert(is_equal_approx(paced._seconds_until_next_send(), 2.0), "最短間隔の未設定で待ち方が変わった")
+	ProjectSettings.set_setting("gmorn_save_saver/min_interval_seconds", 10.0)
+	assert(is_equal_approx(paced._seconds_until_next_send(), 2.0), "まだ送っていないのに待たされた")
+	paced._last_save_started_msec = Time.get_ticks_msec()
+	var wait: float = paced._seconds_until_next_send()
+	if wait < 9.5 or wait > 10.0:
+		push_error("前の送信から最短間隔を待たない: %s" % wait)
+		quit(1)
+		return
+	paced._last_save_started_msec = Time.get_ticks_msec() - 60000
+	assert(is_equal_approx(paced._seconds_until_next_send(), 2.0), "間隔を過ぎても待たされた")
+	ProjectSettings.set_setting("gmorn_save_saver/min_interval_seconds", null)
+	paced.queue_free()
 	_clean()
 	print("GMORN SAVE SAVER VERIFY: PASS")
 	quit(0)

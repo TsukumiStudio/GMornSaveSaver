@@ -36,6 +36,8 @@ GMornSaveSaver.resume(save_path) # 起動時、通常保存をロードした後
 4. Editorから別ユーザーのセーブを試すには、Editorを停止した状態でGMornSaveSaverドックへSave IDを入れて、「Cloudflare Access認証して取得」を押します。`cloudflared access login` が非同期で起動し、初回はブラウザーでCloudflare Accessへログインします。JWTはHTTPヘッダーへ渡すだけで、アドオン内には表示・保存しません。認証キャッシュはcloudflaredが管理します。project_idが一致する辞書データだけを `gmorn_save_saver/preview_path` （既定 `user://gmorn_save_saver_preview.json`）へ保存します。
 5. ゲーム起動時、保存を読む前に `var preview_path = GMornSaveSaver.consume_preview()` を呼び、空でなければゲーム側の保存パスをその値に切り替えます。プレビュー中は送信を止めます。マーカーはEditorからの通常実行に限って一度だけ消費されます。
 
+セーブの送信は、保存が続く間は2秒の静かな間を待ってから最新1件を送ります。プロジェクト設定の `gmorn_save_saver/min_interval_seconds`（秒、既定0）を置くと、前の送信からその秒数が経つまで待ち、間の保存は最新1件にまとめて送ります。保存のたびに送ると、サーバーの履歴が操作ごとに細かく積もるためです。待っている間に終了した分は `.cloud.json` に残り、次の起動の `resume()` で送ります。
+
 通常のゲーム実行でスクリーンショットを撮り、JPEGをMornDrop（`https://drop.tsukumistudio.com`）へアップロードします。新しい画像は最短120秒ごとにし、その間の保存には直近の画像URLを再利用します。取得失敗・上限超過・タイムアウト時もJSONのセーブは続きます。画像のURLとUTC撮影時刻はクラウドセーブAPIの`screenshot`項目に保存し、ゲームデータDictionaryには混ぜません。Editorプラグイン画面、headless、プレビュー実行では撮影しません。Editorから実行した通常のゲームは対象です。
 
 MornDropの画像URLは公開URLです。URLを知る人は閲覧でき、最後に参照されてから30日後に削除されます。画面に個人情報を出した状態で保存しないでください。

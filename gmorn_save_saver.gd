@@ -23,6 +23,8 @@ var _sent_revision := 0
 var _request_endpoint := ""
 var _request_sidecar_path := ""
 var _screenshot_captured_at := ""
+## 直前にセーブを送り始めた時刻（ミリ秒）。送信の最短間隔を守るために見る。
+var _last_save_started_msec := -1
 
 func _ready() -> void:
 	_http = HTTPRequest.new()
@@ -48,7 +50,7 @@ func submit(data: Dictionary, save_path: String) -> void:
 	if not _persist():
 		return
 	_retry.stop()
-	_retry.start(2.0)
+	_retry.start(_seconds_until_next_send())
 	status_changed.emit("クラウド保存を予約しました")
 
 func resume(save_path: String) -> void:
@@ -101,6 +103,22 @@ func _enabled() -> bool:
 	if Engine.is_editor_hint() and OS.get_environment("GMORN_SAVE_SAVER_EDITOR_OPT_IN") != "1":
 		return false
 	return true
+
+## 次のセーブを送るまで待つ秒数。保存が続く間は2秒の静かな間を待つ。
+## `gmorn_save_saver/min_interval_seconds` を置くと、前の送信からその秒数が経つまで
+## 待ち、間の保存は最新1件にまとめて送る。保存のたびに送ると、サーバーの履歴が
+## 操作ごとに細かく積もるため。
+func _seconds_until_next_send() -> float:
+	var wait := 2.0
+	if _last_save_started_msec >= 0:
+		var elapsed := float(Time.get_ticks_msec() - _last_save_started_msec) / 1000.0
+		wait = maxf(wait, _min_interval_seconds() - elapsed)
+	return wait
+
+func _min_interval_seconds() -> float:
+	if ProjectSettings.has_setting("gmorn_save_saver/min_interval_seconds"):
+		return maxf(float(ProjectSettings.get_setting("gmorn_save_saver/min_interval_seconds")), 0.0)
+	return 0.0
 
 func _endpoint() -> String:
 	var value := DEFAULT_ENDPOINT
@@ -255,6 +273,7 @@ func _send_save(endpoint: String) -> void:
 	var headers := PackedStringArray(["Content-Type: application/json", "Authorization: Bearer " + String(_state.write_token)])
 	var pending: Dictionary = _state.pending
 	_sent_revision = int(pending.revision)
+	_last_save_started_msec = Time.get_ticks_msec()
 	var err := _request_save(endpoint, headers, JSON.stringify(pending))
 	if err != OK:
 		_retry_later()
@@ -313,7 +332,8 @@ func _on_request_completed(result: int, code: int, _headers: PackedStringArray, 
 		_retry_seconds = 1.0
 		status_changed.emit("クラウド保存済み")
 		if not _state.pending.is_empty():
-			_send_pending()
+			# 送っている間に溜まった保存も、最短間隔を守って送る。
+			_retry.start(_seconds_until_next_send())
 
 func _on_screenshot_completed(result: int, code: int, body: PackedByteArray, endpoint: String) -> void:
 	_http.timeout = 30.0
